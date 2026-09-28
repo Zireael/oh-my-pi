@@ -3,6 +3,8 @@ import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
 import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { isNativeRendering, onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
+import type { StatusLineRenderer } from "@oh-my-pi/pi-tui/status-line";
 import type {
 	CompactOptions,
 	ExtensionActions,
@@ -89,6 +91,8 @@ function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectIt
 export class ExtensionUiController {
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#composerShapeDisposers: Array<() => void> = [];
+	#statusLineRendererUnsubscribe: (() => void) | undefined;
+	#statusLineRendererNativeUnsubscribe: (() => void) | undefined;
 	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
 	#hookWidgetsBelow = new Map<string, ExtensionUiComponent>();
 	// Single-file dialog surface (`editorContainer` + focus) is shared by the
@@ -109,7 +113,78 @@ export class ExtensionUiController {
 		for (const definition of this.ctx.session.extensionRunner?.getComposerShapes() ?? []) {
 			this.#composerShapeDisposers.push(installExtensionComposerShape(definition));
 		}
+		// Routed through the same gate as the registration listener: a shape
+		// re-sync is the other way the override gets reinstalled, and it must not
+		// be a way around the native-surface check.
+		this.#applyStatusLineRenderer(this.ctx.session.extensionRunner?.getStatusLineRenderer(), false);
 		this.ctx.syncComposerShape();
+	}
+
+	/**
+	 * Keep the status line pointed at the active renderer as extensions register
+	 * one. A renderer registered from a `session_start` handler lands after
+	 * `initialize()` returned, long after the initial sync, so the push has to
+	 * follow the registration rather than only bracket initialization.
+	 *
+	 * The subscription is torn down only by {@link disposeStatusLineRenderer},
+	 * which the shutdown path calls. It deliberately does not share a lifetime
+	 * with {@link disposeComposerShapes}: a shape re-sync must never silently
+	 * drop the watcher and leave the status line on a stale renderer.
+	 */
+	#watchStatusLineRenderer(): void {
+		const extensionRunner = this.ctx.session.extensionRunner;
+		if (!extensionRunner) return;
+		this.#statusLineRendererUnsubscribe?.();
+		// A renderer that throws is reported through the same channel as every
+		// other extension error, so its author finds out it was dropped instead
+		// of only discovering a log line.
+		this.ctx.statusLine.setRendererErrorSink((error, renderer) => {
+			extensionRunner.emitError({
+				extensionPath: extensionRunner.getStatusLineRendererExtensionPath(renderer.id) ?? renderer.id,
+				event: "statusLineRenderer",
+				error: String(error),
+			});
+		});
+		this.#statusLineRendererUnsubscribe = extensionRunner.onStatusLineRendererChanged((renderer, registered) => {
+			this.#applyStatusLineRenderer(renderer, registered);
+			this.ctx.ui.requestRender();
+		});
+		// A Tern Surface Protocol terminal builds its own bar from
+		// `StatusLineComponent.describeComposerFacts()` and never reads
+		// `render()`, so an override installed while a surface is live would
+		// stand down every box placement in order to feed a surface it cannot
+		// reach — a blank composer rather than a renderer's rows. Declining it
+		// keeps the built-in bar honest, and re-syncs when the surface closes
+		// so the renderer is back without a restart.
+		this.#statusLineRendererNativeUnsubscribe?.();
+		this.#statusLineRendererNativeUnsubscribe = onNativeRenderingChange(() => {
+			this.#applyStatusLineRenderer(extensionRunner.getStatusLineRenderer(), false);
+			this.ctx.ui.requestRender();
+		});
+	}
+
+	/**
+	 * Hand the renderer to the status line, unless a native surface owns the bar.
+	 *
+	 * `isNativeRendering` is a process-wide flag set when a TSP surface opens,
+	 * so this is a live check rather than a startup one: the same session can
+	 * gain and lose a surface while it runs.
+	 */
+	#applyStatusLineRenderer(renderer: StatusLineRenderer | undefined, registered: boolean): void {
+		if (isNativeRendering()) {
+			this.ctx.statusLine.setRendererOverride(undefined);
+			return;
+		}
+		this.ctx.statusLine.setRendererOverride(renderer, { retry: registered });
+	}
+
+	/** Drop the status-line renderer subscriptions. Shutdown only. */
+	disposeStatusLineRenderer(): void {
+		this.#statusLineRendererUnsubscribe?.();
+		this.#statusLineRendererUnsubscribe = undefined;
+		this.#statusLineRendererNativeUnsubscribe?.();
+		this.#statusLineRendererNativeUnsubscribe = undefined;
+		this.ctx.statusLine.setRendererErrorSink(undefined);
 	}
 
 	/** Remove extension-owned composer styles from the process registries. */
@@ -322,6 +397,13 @@ export class ExtensionUiController {
 		};
 
 		extensionRunner.initialize(actions, contextActions, commandActions, uiContext, "tui");
+
+		// Watch for renderers registered from the `session_start` emit below.
+		// The one-shot sync at the top of this method runs before
+		// `initialize()`, so it cannot see them; without this subscription a
+		// renderer registered by a lifecycle handler never reaches the status
+		// line and the built-in bar keeps the surface.
+		this.#watchStatusLineRenderer();
 
 		// Subscribe to extension errors
 		extensionRunner.onError((error: ExtensionError) => {
@@ -550,6 +632,7 @@ export class ExtensionUiController {
 		};
 
 		extensionRunner.initialize(actions, contextActions, commandActions, uiContext, "tui");
+		this.#watchStatusLineRenderer();
 		this.#syncExtensionComposerShapes();
 	}
 

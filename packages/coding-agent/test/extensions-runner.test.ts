@@ -4544,6 +4544,7 @@ describe("ExtensionRunner", () => {
 				fileDeleteFallbackHandlers: [],
 				messageRenderers: new Map(),
 				composerShapes: new Map(),
+				statusLineRenderers: new Map(),
 				commands: new Map(),
 				flags: new Map(),
 				shortcuts: new Map(),
@@ -4651,6 +4652,78 @@ describe("ExtensionRunner", () => {
 				);
 			});
 			expect(cachedTexts).toEqual(["persisted user", "persisted assistant"]);
+		});
+	});
+
+	describe("status line renderer registration", () => {
+		const minimalActions = {
+			sendMessage: () => {},
+			sendUserMessage: () => {},
+			appendEntry: () => {},
+			setLabel: () => {},
+			getActiveTools: () => [],
+			getAllTools: () => [],
+			setActiveTools: async () => {},
+			getCommands: () => [],
+			setModel: async () => false,
+			getThinkingLevel: () => undefined,
+			setThinkingLevel: () => {},
+			getSessionName: () => undefined,
+			setSessionName: async () => {},
+		};
+		const minimalContextActions = {
+			getModel: () => undefined,
+			isIdle: () => true,
+			abort: () => {},
+			hasPendingMessages: () => false,
+			shutdown: () => {},
+			getContextUsage: () => undefined,
+			compact: async () => {},
+			getSystemPrompt: () => [],
+		};
+
+		it("announces a renderer registered from a session_start handler, which lands after initialize", async () => {
+			// Registering at load time is the easy case: the TUI's first sync sees
+			// it. Registering from session_start is the common one, and it lands
+			// after initialize() returned, so only the post-initialize
+			// notification can hand it over. That seam was silently dead once —
+			// the runtime kept its pre-init no-op — while every test still passed.
+			await Bun.write(
+				path.join(extensionsDir, "late-renderer.ts"),
+				`export default function(pi) {
+					pi.on("session_start", async () => {
+						pi.registerStatusLineRenderer({ id: "late", label: "Late", render: () => ["late row"] });
+					});
+				}`,
+			);
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+
+			const seen: { id: string | undefined; registered: boolean }[] = [];
+			runner.initialize(minimalActions, minimalContextActions, undefined, undefined, "tui");
+			runner.onStatusLineRendererChanged((renderer, registered) => {
+				seen.push({ id: renderer?.id, registered });
+			});
+
+			// Nothing has registered after initialize yet.
+			expect(seen).toEqual([]);
+
+			await runner.emit({ type: "session_start" });
+
+			expect(seen).toEqual([{ id: "late", registered: true }]);
+			expect(runner.getStatusLineRenderer()?.id).toBe("late");
+			// A failing renderer has to be attributable to the extension that
+			// registered it, or the author only sees an anonymous status line.
+			expect(runner.getStatusLineRendererExtensionPath("late")).toBe(
+				path.join(extensionsDir, "late-renderer.ts"),
+			);
+			expect(runner.getStatusLineRendererExtensionPath("never-registered")).toBeUndefined();
 		});
 	});
 });

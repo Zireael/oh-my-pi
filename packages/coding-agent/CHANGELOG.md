@@ -36,6 +36,11 @@
 - Fixed compiled OMP extensions importing `@oh-my-pi/pi-catalog` and its provider-model subpaths ([#13731](https://github.com/can1357/oh-my-pi/issues/13731)).
 - Explicit `symbolPreset: unicode` now stays Unicode after a Glyph Protocol handshake instead of switching the status bar to Nerd Font icons ([#13865](https://github.com/can1357/oh-my-pi/issues/13865)).
 - Fixed rewinding (`/rewind`, `/tree`) during a running turn hiding the queued-prompt bar, making the still-pending queue look deleted and uneditable ([#13680](https://github.com/can1357/oh-my-pi/issues/13680))
+### Added
+
+- Added `pi.registerStatusLineRenderer(definition)`, letting an extension draw the status surface itself — including several rows, and following the focused subagent window, which the built-in segments could not do. A renderer registered from a `session_start` handler now reaches the status line, a renderer that throws is
+  reported to its author like any other extension error, and on a Tern (TSP) surface the built-in bar is kept
+  instead — the native editor draws that bar itself and no renderer can reach it ([#13582](https://github.com/can1357/oh-my-pi/pull/13582) by [@Zireael](https://github.com/Zireael))
 
 ## [18.4.4] - 2026-09-29
 
@@ -52,6 +57,7 @@
 - RPC clients can now cancel one pending steering or follow-up message with `remove_queued_message`, including its hidden attachment context, without aborting the turn or changing other queued work ([#11872](https://github.com/can1357/oh-my-pi/pull/11872) by [@andrebrait](https://github.com/andrebrait)).
 - Added typed queued-message removal to the official Python RPC client, including validated success and refusal results ([#11872](https://github.com/can1357/oh-my-pi/pull/11872) by [@andrebrait](https://github.com/andrebrait)).
 - RPC clients can now render the actual pending-message queue instead of tracking it themselves: `get_state` reports a `queuedMessages` snapshot and a new `queue_update` event reports it live as steering/follow-up messages are queued, delivered, removed, or cleared ([#11872](https://github.com/can1357/oh-my-pi/pull/11872) by [@andrebrait](https://github.com/andrebrait)).
+### Added
 
 ### Changed
 
