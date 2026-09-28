@@ -14,11 +14,13 @@ import {
 	type ComposerStyle,
 	claudeComposerStyle,
 	padding,
+	replaceTabs,
 	SPINNER_ADVANCE_MS,
 	truncateToWidth,
 	visibleWidth,
 } from "../index";
 import { adjustHsv, formatNumber, getProjectDir, hexToRgb, rgbToHex } from "@oh-my-pi/pi-utils";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 import type {
 	ActiveRepoContext,
 	StatusAccountIdentity as OAuthAccountIdentity,
@@ -51,6 +53,7 @@ import type {
 	ComposerFactsSource,
 	EffectiveStatusLineSettings,
 	SegmentView,
+	StatusLineRenderer,
 	StatusLineSegmentId,
 	StatusLineSegmentOptions,
 	StatusLineSettings,
@@ -678,6 +681,34 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#recording = false;
 	#focusedAgentId: string | undefined;
 	#activeRepoCache: ActiveRepoCache | undefined;
+	/**
+	 * Extension-registered renderer override. When set, it owns the entire
+	 * status surface: `render()` delegates to it and the single-line border
+	 * surfaces (`getTopBorder`/`getBandTopBorder`/`getStandaloneTopBorder`)
+	 * yield empty content so the multi-row output is not duplicated behind
+	 * the editor.
+	 *
+	 * The prepaint frame needs no guard: `createStartupStatusLine` builds a
+	 * separate short-lived component that is disposed when the session-bound
+	 * bar mounts, and the override is only ever installed on the latter.
+	 */
+	#rendererOverride: StatusLineRenderer | undefined;
+	/**
+	 * Ids of renderers that threw while painting. The runner still holds a
+	 * broken renderer in `extension.statusLineRenderers`, so without this a
+	 * later registration notification or shape re-sync would reinstall it and
+	 * the surface would flap between the renderer and the built-in bar. A fresh
+	 * registration is the one event that clears the block, so a fixed renderer
+	 * can be re-registered under the same id.
+	 */
+	#failedRendererIds = new Set<string>();
+	/**
+	 * Where a failing renderer is reported. pi-tui cannot reach the extension
+	 * runtime, so the host installs a sink that forwards to the same channel as
+	 * every other extension error; without one the failure is log-only and the
+	 * author never learns the renderer was dropped.
+	 */
+	#rendererErrorSink: ((error: unknown, renderer: StatusLineRenderer) => void) | undefined;
 
 	// Git status caching (1s TTL)
 	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
@@ -3178,6 +3209,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	}
 
 	getTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
+		if (this.#rendererOverride) return { content: "", width: 0, revision: this.#renderRevision };
 		const statusLine = this.#buildStatusLine(width, "box", previewTitle);
 		return {
 			content: statusLine.dimmedContent,
@@ -3188,6 +3220,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 
 	/** Flush-left soft-capped powerline band (the band composer's top row). */
 	getBandTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
+		if (this.#rendererOverride) return { content: "", width: 0, revision: this.#renderRevision };
 		const statusLine = this.#buildStatusLine(width, "band", previewTitle);
 		return {
 			content: statusLine.dimmedContent,
@@ -3225,6 +3258,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 
 	/** Plain right-group content for the claude composer's top rule. */
 	getStandaloneTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
+		if (this.#rendererOverride) return { content: "", width: 0, revision: this.#renderRevision };
 		const statusLine = this.#buildStatusLine(width, "plain-right", previewTitle);
 		return {
 			content: statusLine.dimmedContent,
@@ -3250,6 +3284,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * render.
 	 */
 	getPreviewLines(width: number, style?: Pick<ComposerStyle, "statusAttachment" | "bottomBar">): string[] {
+		// An installed renderer owns the surface outright: preview the rows it
+		// would paint rather than the built-in bar it has replaced.
+		if (this.#rendererOverride) return [...this.#renderThroughOverride(width)];
 		const attachment = style?.statusAttachment ?? this.#topAttachment;
 		const bottomBar =
 			style?.bottomBar ?? (this.#standalone === false ? "none" : this.#standalone === "left-only" ? "left" : "full");
@@ -3554,7 +3591,17 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		);
 	}
 
+	/**
+	 * Rows for the composer's `StatusHost`, the one surface a renderer owns.
+	 *
+	 * With an override installed this is its only path: the built-in bar, the
+	 * hook-status rows and every border surface all stand down, so the renderer's
+	 * rows are drawn once, in the place the bar they replaced used to sit. The
+	 * `#standalone` setting governs the built-in bar only, so it does not apply
+	 * to a renderer that has been handed the surface.
+	 */
 	render(width: number): readonly string[] {
+		if (this.#rendererOverride) return this.#renderThroughOverride(width);
 		const lines: string[] = [];
 		if (this.#standalone && !this.#autocompleteActiveProbe?.()) {
 			const content = this.renderBottomBar(width, this.#standalone === "left-only" ? "left" : "full");
@@ -3568,5 +3615,60 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			lines.push(...this.#sortedHookStatuses.map(text => truncateToWidth(sanitizeStatusText(text), width)));
 		}
 		return lines;
+	}
+
+	/**
+	 * Install or clear an extension-registered status-line renderer.
+	 *
+	 * While set, it owns the whole surface: `render()` is the only path that
+	 * paints it, and the single-line border surfaces yield empty content so the
+	 * rows are not duplicated. `retry` marks a genuine re-registration rather
+	 * than a sync, lifting the block left by a renderer that threw.
+	 */
+	setRendererOverride(renderer: StatusLineRenderer | undefined, options?: { retry?: boolean }): void {
+		if (options?.retry) this.#failedRendererIds.clear();
+		if (renderer && this.#failedRendererIds.has(renderer.id)) {
+			// Already proved broken this session. Keep the built-in bar rather
+			// than reinstalling a renderer that will only throw again.
+			renderer = undefined;
+		}
+		this.#rendererOverride = renderer;
+		this.#invalidateStatusLineRenderCache();
+	}
+
+	/** Where a renderer that throws while painting is reported. */
+	setRendererErrorSink(sink: ((error: unknown, renderer: StatusLineRenderer) => void) | undefined): void {
+		this.#rendererErrorSink = sink;
+	}
+
+	#renderThroughOverride(width: number): readonly string[] {
+		const override = this.#rendererOverride;
+		if (!override) return [];
+		const effectiveSettings = this.#resolveSettings();
+		const ctx = this.#buildSegmentContext(width, effectiveSettings.segmentOptions, true, true, true, Date.now());
+		let rows: readonly string[];
+		try {
+			rows = override.render(ctx, this.#hookStatuses, width);
+		} catch (error) {
+			// A broken extension renderer must never blank the status surface.
+			// Block the id, drop the override, and let the built-in bar take the
+			// one surface back. Reported to the host as well as logged, or the
+			// only symptom is a status line that quietly stopped obeying the
+			// extension.
+			this.#failedRendererIds.add(override.id);
+			this.#rendererOverride = undefined;
+			this.#invalidateStatusLineRenderCache();
+			this.#rendererErrorSink?.(error, override);
+			logger.warn("Extension status-line renderer failed; the built-in bar takes the surface back", {
+				id: override.id,
+				error: String(error),
+			});
+			return this.render(width);
+		}
+		// Renderer output is untrusted text: expand tabs so a row cannot punch a
+		// hole in the terminal, and collapse newlines so a single declared row
+		// cannot inject extra TUI rows. SGR is preserved — color is the point of
+		// the API, which is also why this is not `sanitizeDisplayText`.
+		return rows.map(line => truncateToWidth(replaceTabs(line).replace(/[\r\n]+/g, " "), width));
 	}
 }

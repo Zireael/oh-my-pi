@@ -67,6 +67,22 @@ export type EffectiveStatusLineSettings = Required<
 > &
 	StatusLineSettings;
 
+/**
+ * Extension-registered status-line renderer. When one is installed, it replaces
+ * every built-in status placement (embedded top border, band, standalone bar):
+ * the component's `render()` delegates to it with a live segment context and
+ * the extension-status map, and the single-line border surfaces yield empty
+ * content so the multi-row output is not duplicated.
+ */
+export interface StatusLineRenderer {
+	/** Stable id; a later registration with the same id replaces the earlier one. */
+	id: string;
+	/** Human-readable label for selector/registry copy. */
+	label: string;
+	/** Render the full status surface. Rows render top-to-bottom. */
+	render(ctx: SegmentContext, hookStatuses: ReadonlyMap<string, string>, width: number): readonly string[];
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Segment Rendering
 // ═══════════════════════════════════════════════════════════════════════════

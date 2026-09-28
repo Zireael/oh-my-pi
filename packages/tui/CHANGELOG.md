@@ -13,6 +13,9 @@
 - Fixed home directories next to shell redirections, control operators or Markdown emphasis (`<`, `>`, `&`, `|`, `*`, `_`) leaking the full path in display-only text ([#11210](https://github.com/can1357/oh-my-pi/pull/11210) by [@DarkPhilosophy](https://github.com/DarkPhilosophy)).
 - Fixed the subagent task card showing full home paths in tool intents and arguments, while keeping search patterns literal ([#11210](https://github.com/can1357/oh-my-pi/pull/11210) by [@DarkPhilosophy](https://github.com/DarkPhilosophy)).
 - Fixed Enter doing nothing on a fully typed slash-command argument while its completion popup was open (e.g. `/mcp list`): it now submits instead of re-accepting the identical completion; subcommands that still need a required argument (e.g. `/mcp test`) keep inserting the subcommand so you can type it ([#13885](https://github.com/can1357/oh-my-pi/pull/13885) by [@H4vC](https://github.com/H4vC)).
+### Added
+
+- Added `StatusLineRenderer`, a whole-surface status-line renderer: while one is installed, `render()` returns the rows it paints and every built-in placement stands down, so the rows are drawn once in the place the bar they replaced sat. A renderer that throws is reported through the host, dropped, and kept out until it is registered again, so the built-in bar takes the surface back instead of the status line going blank ([#13582](https://github.com/can1357/oh-my-pi/pull/13582) by [@Zireael](https://github.com/Zireael))
 
 ## [18.4.4] - 2026-09-29
 
@@ -93,6 +96,8 @@
 ### Breaking Changes
 
 - Replaced `AgentsHubDeps.setDisabledAgents`/`setOverrides` with `setAgentDisabled(name, { disabled })` and `setAgentOverride(property, name, value)`, so each hub edit persists only the agent it changes; `PropertyKind` is exported ([#13308](https://github.com/can1357/oh-my-pi/pull/13308) by [@Vortex727](https://github.com/Vortex727))
+
+### Added
 
 ### Changed
 
