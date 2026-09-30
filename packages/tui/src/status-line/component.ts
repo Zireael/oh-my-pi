@@ -42,7 +42,7 @@ import { summarizeUsageResetCredits } from "../overlays/usage-display";
 import { getPreset } from "./presets";
 import { describeSegment, renderSegment, type SegmentContext } from "./segments";
 import type { TspProps } from "@oh-my-pi/pi-wire";
-import type { NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { col, node, span } from "../native/describe";
 import { getContextMeterThresholds, getContextUsageLevel, getContextUsageTone } from "../chrome/context-thresholds";
 import { isNativeRendering } from "../native/state";
@@ -114,8 +114,13 @@ interface NativeFactsMemo {
 	renderRevision: number;
 	inputRevision: number;
 	clockTick: number;
+	/** Surface width the facts were described at, so a resize rebuilds. */
+	cols: number;
 	externalInputs: StatusLineExternalInputs;
 }
+
+/** A mounted, invisible dock block: the status surface owns no dock space. */
+const EMPTY_DOCK_BLOCK: NativeNode = col([]);
 
 /** JSON replacer dropping `age`: a rebuilt `elapsed` differs only by send time. */
 function withoutAges(key: string, value: unknown): unknown {
@@ -772,6 +777,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	// message list + model window yields a stable result we can return verbatim.
 	#contextUsageCache: ContextUsageMemo | undefined;
 	#nativeMemo: NativeFactsMemo | undefined;
+	/** Last dock block, so an unchanged frame re-sends nothing. */
+	#nativeBlockMemo: { node: NativeNode; rows: readonly string[]; cols: number } | undefined;
 	/** Last pull request reported through {@link onNativePullRequest}. */
 	#nativePullRequest: StatusLinePullRequest | undefined;
 	/** Reused probe buffer for the native memo check; handed to the memo on a rebuild. */
@@ -899,6 +906,15 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 
 	getEffectiveSettingsForTest(): EffectiveStatusLineSettings {
 		return this.#resolveSettings();
+	}
+
+	/**
+	 * Live snapshot of extension statuses (set via `setHookStatus`), keyed by
+	 * status key. Used by the extension API so plugins can enumerate what
+	 * other extensions have published.
+	 */
+	getHookStatuses(): ReadonlyMap<string, string> {
+		return this.#hookStatuses;
 	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
@@ -3318,12 +3334,65 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	}
 
 	/**
+	 * The status surface's own block for a TSP terminal's dock, below the
+	 * composer. Empty when no renderer owns the surface, so the dock carries a
+	 * stable child whether or not one is installed.
+	 *
+	 * A renderer that declares `nativePlacement: "dock"` mounts the node its
+	 * `describeNative` returns; anything else mounts its `render()` rows as a
+	 * `rows` node, which is how a `render()`-only renderer reaches a TSP terminal
+	 * at all. Returns the same object while nothing changed, so an unchanged
+	 * frame sends nothing.
+	 */
+	describeNativeBlock(cx: DescribeContext): NativeNode {
+		const override = this.#rendererOverride;
+		if (!override) return EMPTY_DOCK_BLOCK;
+		const cols = Math.max(1, cx.cols);
+		if (override.describeNative) {
+			// A described renderer is mounted once, at the placement it declared.
+			// Returning null declines the mount rather than falling back to its rows,
+			// or a bar renderer would also appear in the dock and paint twice.
+			if (override.nativePlacement !== "dock") return EMPTY_DOCK_BLOCK;
+			// A null return declines the mount, exactly as it declines the bar slot.
+			return this.#describeThroughOverride(cx, this.#dockSegmentContext()) ?? EMPTY_DOCK_BLOCK;
+		}
+		// No `describeNative`: the rows fallback, which is the only way such a
+		// renderer reaches a TSP terminal. The same rows, sanitized, the box
+		// surface shows. One that threw was dropped, so there is nothing to mount.
+		const rows = this.#rendererRows(cols);
+		if (!rows || rows.length === 0) return EMPTY_DOCK_BLOCK;
+		const memo = this.#nativeBlockMemo;
+		if (memo && memo.rows === rows && memo.cols === cols) return memo.node;
+		const block = node("rows", { cols, lines: rows });
+		this.#nativeBlockMemo = { node: block, rows, cols };
+		return block;
+	}
+
+	/**
+	 * Segment context for a dock block. No pull request is looked up: the block
+	 * is not the bar, and the lookups the composer facts do are enough to keep a
+	 * renderer from spawning git work it did not ask for.
+	 */
+	#dockSegmentContext(): SegmentContext {
+		return this.#buildSegmentContext(
+			0,
+			this.#resolveSettings().segmentOptions,
+			false,
+			false,
+			false,
+			Date.now(),
+		);
+	}
+
+	/**
 	 * The composer's facts on a TSP terminal, which draws no status strip: the
 	 * context hairline, the model chip label, the usage text, and every other
-	 * configured segment as a `seg` in configured order with its drop priority.
+	 * configured segment as a `seg` in configured order with its drop priority
+	 * — unless an installed renderer describes that last slot itself (see
+	 * {@link StatusLineRenderer.describeNative}).
 	 * Returns the same object while nothing changed.
 	 */
-	describeComposerFacts(): ComposerFacts {
+	describeComposerFacts(cx: DescribeContext): ComposerFacts {
 		const effectiveSettings = this.#resolveSettings();
 		const probe = this.#nativeInputsProbe;
 		this.#readStatusLineExternalInputs(probe);
@@ -3335,12 +3404,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			memo.renderRevision === this.#renderRevision &&
 			memo.inputRevision === this.#statusLineInputRevision &&
 			memo.clockTick === clockTick &&
+			memo.cols === cx.cols &&
 			this.#sameStatusLineExternalInputs(memo.externalInputs, probe)
 		) {
 			return memo.facts;
 		}
 		this.#nativeInputsProbe = new StatusLineExternalInputs();
-		const built = this.#buildComposerFacts(effectiveSettings, nowMs);
+		const built = this.#buildComposerFacts(effectiveSettings, nowMs, cx);
 		const fingerprint = JSON.stringify(built, withoutAges);
 		this.#nativeMemo = {
 			facts: memo?.fingerprint === fingerprint ? memo.facts : built,
@@ -3348,6 +3418,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			renderRevision: this.#renderRevision,
 			inputRevision: this.#statusLineInputRevision,
 			clockTick,
+			// A resize must rebuild: a renderer's description may read `cols`, and
+			// the memo would otherwise hand it the previous width's node.
+			cols: cx.cols,
 			externalInputs: probe,
 		};
 		return this.#nativeMemo.facts;
@@ -3382,7 +3455,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		}
 	}
 
-	#buildComposerFacts(effectiveSettings: EffectiveStatusLineSettings, nowMs: number): ComposerFacts {
+	#buildComposerFacts(effectiveSettings: EffectiveStatusLineSettings, nowMs: number, cx: DescribeContext): ComposerFacts {
 		const { leftSegments, rightSegments } = effectiveSettings;
 		const segments = [...leftSegments, ...rightSegments];
 		// Tern's pane header shows the path and branch from the pane's cwd; only the PR is looked up here.
@@ -3401,29 +3474,41 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		}
 
 		const dim = this.#focusedAgentId !== undefined;
+		// An installed renderer that describes the bar takes the flexible space
+		// itself, so the configured segments and the hook statuses trailing them
+		// are not described at all — the same substitution `render()` makes on a
+		// box terminal, where the renderer also takes the hook rows.
+		// A renderer that claimed the dock mounts there, so the bar's segments
+		// stay and are described as usual. Without the check a renderer with a
+		// `describeNative` would be mounted in both places at once.
+		const described = this.#rendererOverride?.nativePlacement === "dock"
+			? null
+			: this.#describeThroughOverride(cx, ctx);
 		const facts: NativeNode[] = [];
-		const collect = (side: "left" | "right", ids: readonly StatusLineSegmentId[]): void => {
-			ids.forEach((id, index) => {
-				if (COMPOSER_HOMED_SEGMENTS[id] || (id === "pi" && ctx.focusedAgentId === undefined)) return;
-				const view = describeSegment(id, ctx);
-				if (!view) return;
-				const props: TspProps<"seg"> = {
-					role: "omp.composer.fact",
-					priority: statusSegmentPriority(side, index, ids.length),
-				};
-				facts.push(describeSeg(id, props, view, dim));
-			});
-		};
-		collect("left", leftSegments);
-		collect("right", rightSegments);
-		// Hook statuses the `status` segment doesn't already carry trail the configured facts.
-		if ((this.#settings.showHookStatus ?? true) && !segments.includes("status")) {
-			this.#sortedHookStatuses.forEach((status, index) => {
-				const text = sanitizeStatusText(status);
-				if (!text) return;
-				const props: TspProps<"seg"> = { role: "omp.composer.fact", priority: 0 };
-				facts.push(describeSeg(`hook-${index}`, props, { spans: [span(text)] }, dim));
-			});
+		if (!described) {
+			const collect = (side: "left" | "right", ids: readonly StatusLineSegmentId[]): void => {
+				ids.forEach((id, index) => {
+					if (COMPOSER_HOMED_SEGMENTS[id] || (id === "pi" && ctx.focusedAgentId === undefined)) return;
+					const view = describeSegment(id, ctx);
+					if (!view) return;
+					const props: TspProps<"seg"> = {
+						role: "omp.composer.fact",
+						priority: statusSegmentPriority(side, index, ids.length),
+					};
+					facts.push(describeSeg(id, props, view, dim));
+				});
+			};
+			collect("left", leftSegments);
+			collect("right", rightSegments);
+			// Hook statuses the `status` segment doesn't already carry trail the configured facts.
+			if ((this.#settings.showHookStatus ?? true) && !segments.includes("status")) {
+				this.#sortedHookStatuses.forEach((status, index) => {
+					const text = sanitizeStatusText(status);
+					if (!text) return;
+					const props: TspProps<"seg"> = { role: "omp.composer.fact", priority: 0 };
+					facts.push(describeSeg(`hook-${index}`, props, { spans: [span(text)] }, dim));
+				});
+			}
 		}
 
 		const pct = ctx.contextPercent;
@@ -3489,7 +3574,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		return {
 			context,
 			model: describeSegment("model", modelCtx) ?? { spans: [] },
-			extras: node("status", { role: "omp.composer.extras", transparent: true, grow: 1 }, facts, "extras"),
+			extras: described ?? node("status", { role: "omp.composer.extras", transparent: true, grow: 1 }, facts, "extras"),
 			usage,
 		};
 	}
@@ -3642,8 +3727,23 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	}
 
 	#renderThroughOverride(width: number): readonly string[] {
+		if (!this.#rendererOverride) return [];
+		const rows = this.#rendererRows(width);
+		// A renderer that threw was dropped, so `render()` paints the built-in bar.
+		return rows ?? this.render(width);
+	}
+
+	/**
+	 * The renderer's rows for `width`, sanitized, or null when no override is
+	 * installed or the installed one threw — in which case the id is blocked
+	 * and the built-in bar takes the surface back.
+	 *
+	 * Shared by the box path and the TSP dock block, so both sanitize the same way
+	 * and a failure in either drops the renderer exactly once.
+	 */
+	#rendererRows(width: number): readonly string[] | null {
 		const override = this.#rendererOverride;
-		if (!override) return [];
+		if (!override) return null;
 		const effectiveSettings = this.#resolveSettings();
 		const ctx = this.#buildSegmentContext(width, effectiveSettings.segmentOptions, true, true, true, Date.now());
 		let rows: readonly string[];
@@ -3651,24 +3751,56 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			rows = override.render(ctx, this.#hookStatuses, width);
 		} catch (error) {
 			// A broken extension renderer must never blank the status surface.
-			// Block the id, drop the override, and let the built-in bar take the
-			// one surface back. Reported to the host as well as logged, or the
-			// only symptom is a status line that quietly stopped obeying the
-			// extension.
-			this.#failedRendererIds.add(override.id);
-			this.#rendererOverride = undefined;
-			this.#invalidateStatusLineRenderCache();
-			this.#rendererErrorSink?.(error, override);
-			logger.warn("Extension status-line renderer failed; the built-in bar takes the surface back", {
-				id: override.id,
-				error: String(error),
-			});
-			return this.render(width);
+			this.#failRenderer(override, error, "render");
+			return null;
 		}
 		// Renderer output is untrusted text: expand tabs so a row cannot punch a
 		// hole in the terminal, and collapse newlines so a single declared row
 		// cannot inject extra TUI rows. SGR is preserved — color is the point of
 		// the API, which is also why this is not `sanitizeDisplayText`.
 		return rows.map(line => truncateToWidth(replaceTabs(line).replace(/[\r\n]+/g, " "), width));
+	}
+
+	/**
+	 * The renderer's bar node for a TSP terminal, or null when no renderer is
+	 * installed, none describes one, or the renderer is `render()`-only.
+	 *
+	 * `segments` is the context the built-in facts were built from rather than a
+	 * second one, so a described node is derived from exactly the values the bar
+	 * would have shown — and no second pull request is looked up to build it.
+	 */
+	#describeThroughOverride(cx: DescribeContext, ctx: SegmentContext): NativeNode | null {
+		const override = this.#rendererOverride;
+		const describe = override?.describeNative;
+		if (!override || !describe) return null;
+		try {
+			return describe.call(override, { ...cx, segments: ctx, hookStatuses: this.#hookStatuses });
+		} catch (error) {
+			// Same contract as a throw from `render()`: the id is blocked and the
+			// built-in facts take the slot back, so one broken method cannot take
+			// the composer's bar down with it.
+			this.#failRenderer(override, error, "describeNative");
+			return null;
+		}
+	}
+
+	/**
+	 * Block a renderer that threw and hand the surface back to the built-in bar.
+	 *
+	 * Reported to the host as well as logged, or the only symptom is a status
+	 * line that quietly stopped obeying the extension. Invalidating the input
+	 * revision is what makes the native memo rebuild: a description that threw
+	 * mid-build has already fallen back, and the next frame must not be served
+	 * the one before the drop.
+	 */
+	#failRenderer(override: StatusLineRenderer, error: unknown, path: "render" | "describeNative"): void {
+		this.#failedRendererIds.add(override.id);
+		this.#rendererOverride = undefined;
+		this.#invalidateStatusLineRenderCache();
+		this.#rendererErrorSink?.(error, override);
+		logger.warn(`Extension status-line renderer failed in ${path}; the built-in bar takes the surface back`, {
+			id: override.id,
+			error: String(error),
+		});
 	}
 }

@@ -1015,10 +1015,10 @@ export class CustomEditor extends Editor {
 	 * runs). Clicks come back as `status.model`, `thinking.cycle`, `submit`
 	 * and `interrupt` actions.
 	 */
-	override describeLayout = (input: NativeNode, _cx: DescribeContext): NativeEditorLayout => {
+	override describeLayout = (input: NativeNode, cx: DescribeContext): NativeEditorLayout => {
 		const state = this.composerState();
 		const shell = state.shell;
-		const facts = this.composerFacts?.describeComposerFacts();
+		const facts = this.composerFacts?.describeComposerFacts(cx);
 		const thinkingKey = this.#actionKeys.get("app.thinking.cycle")?.[0];
 		const modelKey = this.#actionKeys.get("app.model.selectTemporary")?.[0];
 		const interruptKey = this.#actionKeys.get("app.interrupt")?.[0] ?? "escape";
