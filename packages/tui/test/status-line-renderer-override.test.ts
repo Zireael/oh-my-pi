@@ -254,7 +254,11 @@ describe("the TSP native surface", () => {
 	});
 
 	it("gives a described bar the flexible space the configured segments held", () => {
-		const component = createComponent("main-model", { preset: "custom", leftSegments: ["hostname"], rightSegments: [] });
+		const component = createComponent("main-model", {
+			preset: "custom",
+			leftSegments: ["hostname"],
+			rightSegments: [],
+		});
 		expect(segKeys(component)).toEqual(["hostname"]);
 
 		component.setRendererOverride({
@@ -344,7 +348,11 @@ describe("the TSP native surface", () => {
 	});
 
 	it("blocks a describeNative that throws and hands the bar back to the built-in facts", () => {
-		const component = createComponent("main-model", { preset: "custom", leftSegments: ["hostname"], rightSegments: [] });
+		const component = createComponent("main-model", {
+			preset: "custom",
+			leftSegments: ["hostname"],
+			rightSegments: [],
+		});
 		const failures: { id: string; error: string }[] = [];
 		component.setRendererErrorSink((error, renderer) => failures.push({ id: renderer.id, error: String(error) }));
 		const broken: StatusLineRenderer = {
@@ -448,7 +456,11 @@ describe("the TSP dock block", () => {
 	});
 
 	it("mounts a dock-placed renderer's described node, and leaves the bar to the built-in facts", () => {
-		const component = createComponent("main-model", { preset: "custom", leftSegments: ["hostname"], rightSegments: [] });
+		const component = createComponent("main-model", {
+			preset: "custom",
+			leftSegments: ["hostname"],
+			rightSegments: [],
+		});
 		component.setRendererOverride({
 			id: "rows",
 			label: "Rows",
@@ -465,7 +477,11 @@ describe("the TSP dock block", () => {
 	});
 
 	it("mounts a bar-placed renderer's node in the bar only, never in both", () => {
-		const component = createComponent("main-model", { preset: "custom", leftSegments: ["hostname"], rightSegments: [] });
+		const component = createComponent("main-model", {
+			preset: "custom",
+			leftSegments: ["hostname"],
+			rightSegments: [],
+		});
 		component.setRendererOverride({
 			id: "rows",
 			label: "Rows",

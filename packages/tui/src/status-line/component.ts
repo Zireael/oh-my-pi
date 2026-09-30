@@ -3374,14 +3374,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * renderer from spawning git work it did not ask for.
 	 */
 	#dockSegmentContext(): SegmentContext {
-		return this.#buildSegmentContext(
-			0,
-			this.#resolveSettings().segmentOptions,
-			false,
-			false,
-			false,
-			Date.now(),
-		);
+		return this.#buildSegmentContext(0, this.#resolveSettings().segmentOptions, false, false, false, Date.now());
 	}
 
 	/**
@@ -3455,7 +3448,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		}
 	}
 
-	#buildComposerFacts(effectiveSettings: EffectiveStatusLineSettings, nowMs: number, cx: DescribeContext): ComposerFacts {
+	#buildComposerFacts(
+		effectiveSettings: EffectiveStatusLineSettings,
+		nowMs: number,
+		cx: DescribeContext,
+	): ComposerFacts {
 		const { leftSegments, rightSegments } = effectiveSettings;
 		const segments = [...leftSegments, ...rightSegments];
 		// Tern's pane header shows the path and branch from the pane's cwd; only the PR is looked up here.
@@ -3481,9 +3478,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		// A renderer that claimed the dock mounts there, so the bar's segments
 		// stay and are described as usual. Without the check a renderer with a
 		// `describeNative` would be mounted in both places at once.
-		const described = this.#rendererOverride?.nativePlacement === "dock"
-			? null
-			: this.#describeThroughOverride(cx, ctx);
+		const described =
+			this.#rendererOverride?.nativePlacement === "dock" ? null : this.#describeThroughOverride(cx, ctx);
 		const facts: NativeNode[] = [];
 		if (!described) {
 			const collect = (side: "left" | "right", ids: readonly StatusLineSegmentId[]): void => {
@@ -3574,7 +3570,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		return {
 			context,
 			model: describeSegment("model", modelCtx) ?? { spans: [] },
-			extras: described ?? node("status", { role: "omp.composer.extras", transparent: true, grow: 1 }, facts, "extras"),
+			extras:
+				described ?? node("status", { role: "omp.composer.extras", transparent: true, grow: 1 }, facts, "extras"),
 			usage,
 		};
 	}
