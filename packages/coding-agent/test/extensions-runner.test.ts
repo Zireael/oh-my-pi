@@ -34,6 +34,7 @@ import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/ex
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
+import { isNativeRendering, setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 describe("ExtensionRunner", () => {
@@ -69,6 +70,9 @@ describe("ExtensionRunner", () => {
 	afterEach(() => {
 		testSetExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
 		testSetSessionShutdownHandlerTimeoutMs(SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS);
+		// The native flag is process-wide; a leaked `true` would send every later
+		// test down the TSP path.
+		setNativeRendering(false);
 		tempDir.removeSync();
 	});
 
@@ -4724,6 +4728,47 @@ describe("ExtensionRunner", () => {
 				path.join(extensionsDir, "late-renderer.ts"),
 			);
 			expect(runner.getStatusLineRendererExtensionPath("never-registered")).toBeUndefined();
+		});
+
+		it("hands the renderer over and attributes it while a native surface owns the bar", async () => {
+			// A Tern (TSP) terminal builds its own bar and never reads `render()`.
+			// The status line describes a dock block there, so the override does
+			// reach that surface -- but only if the runner still announces it
+			// there. Gating the announcement on the surface is what would leave
+			// the block with nothing to paint and no error to show for it.
+			setNativeRendering(true);
+			try {
+				await Bun.write(
+					path.join(extensionsDir, "tsp-renderer.ts"),
+					`export default function(pi) {
+						pi.on("session_start", async () => {
+							pi.registerStatusLineRenderer({ id: "tsp", label: "TSP", render: () => ["tsp row"] });
+						});
+					}`,
+				);
+				const result = await loadTestExtensions();
+				const runner = new ExtensionRunner(
+					result.extensions,
+					result.runtime,
+					tempDir.path(),
+					sessionManager,
+					modelRegistry,
+				);
+
+				const seen: { id: string | undefined; registered: boolean }[] = [];
+				runner.initialize(minimalActions, minimalContextActions, undefined, undefined, "tui");
+				runner.onStatusLineRendererChanged((renderer, registered) => {
+					seen.push({ id: renderer?.id, registered });
+				});
+				await runner.emit({ type: "session_start" });
+
+				expect(isNativeRendering()).toBe(true);
+				expect(seen).toEqual([{ id: "tsp", registered: true }]);
+				expect(runner.getStatusLineRenderer()?.id).toBe("tsp");
+				expect(runner.getStatusLineRendererExtensionPath("tsp")).toBe(path.join(extensionsDir, "tsp-renderer.ts"));
+			} finally {
+				setNativeRendering(false);
+			}
 		});
 	});
 });

@@ -552,13 +552,11 @@ describe("ExtensionUiController custom overlay", () => {
 });
 
 /**
- * A Tern Surface Protocol terminal draws its status bar from
- * `StatusLineComponent.describeComposerFacts()` and never reads `render()`, so
- * a renderer cannot reach it. Installing the override there would stand down
- * every box placement to feed a surface that ignores it — the composer loses
- * its status line entirely instead of keeping the built-in bar. The controller
- * therefore declines the override while a surface is live, and reinstates it
- * when the surface closes.
+ * A Tern Surface Protocol terminal is not a reason to decline a renderer: the
+ * status line describes a dock block there — the renderer's rows, or the node its
+ * `describeNative` returns — so the override reaches whichever surface is live.
+ * These tests pin that the controller installs it unconditionally, which is what
+ * lets a session gain and lose a surface without a re-sync.
  */
 describe("ExtensionUiController status-line renderer on a native surface", () => {
 	const renderer = { id: "rows", label: "Rows", render: () => ["ROW-A"] };
@@ -577,21 +575,19 @@ describe("ExtensionUiController status-line renderer on a native surface", () =>
 		expect(installed.at(-1)?.[0]).toMatchObject({ id: "rows" });
 	});
 
-	it("declines the renderer while a Tern surface owns the bar", async () => {
+	it("installs the renderer while a Tern surface is live, where the status line paints it in the dock", async () => {
 		setNativeRendering(true);
 		const harness = makeHarness();
 		await harness.init();
 		harness.setRendererOverride.mockClear();
 		harness.announceRenderer(renderer);
 
-		// Nothing may be installed, and the surface must be left with no
-		// override rather than a stale one from before it opened.
-		for (const [value] of harness.setRendererOverride.mock.calls) {
-			expect(value).toBeUndefined();
-		}
+		// Declining here is what used to leave a Tern user with no rows at all.
+		const installed = harness.setRendererOverride.mock.calls.filter(([value]) => value !== undefined);
+		expect(installed.at(-1)?.[0]).toMatchObject({ id: "rows" });
 	});
 
-	it("reinstates the renderer when the surface closes, without a re-registration", async () => {
+	it("needs no re-sync when the surface closes, because it was never withheld", async () => {
 		setNativeRendering(true);
 		const harness = makeHarness();
 		await harness.init();
@@ -599,10 +595,10 @@ describe("ExtensionUiController status-line renderer on a native surface", () =>
 		harness.announceRenderer(renderer);
 		harness.setRendererOverride.mockClear();
 
+		// Closing the surface used to need a native-rendering subscription to
+		// reinstall the override. With no gate there is nothing to reinstall: the
+		// override is still installed, and the box surface picks it up.
 		setNativeRendering(false);
-
-		const installed = harness.setRendererOverride.mock.calls.filter(([value]) => value !== undefined);
-		expect(installed.length).toBeGreaterThan(0);
-		expect(installed.at(-1)?.[0]).toMatchObject({ id: "rows" });
+		expect(harness.setRendererOverride.mock.calls).toEqual([]);
 	});
 });

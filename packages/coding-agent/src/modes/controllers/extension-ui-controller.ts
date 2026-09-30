@@ -3,7 +3,6 @@ import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
 import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
-import { isNativeRendering, onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
 import type { StatusLineRenderer } from "@oh-my-pi/pi-tui/status-line";
 import type {
 	CompactOptions,
@@ -92,7 +91,6 @@ export class ExtensionUiController {
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#composerShapeDisposers: Array<() => void> = [];
 	#statusLineRendererUnsubscribe: (() => void) | undefined;
-	#statusLineRendererNativeUnsubscribe: (() => void) | undefined;
 	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
 	#hookWidgetsBelow = new Map<string, ExtensionUiComponent>();
 	// Single-file dialog surface (`editorContainer` + focus) is shared by the
@@ -149,32 +147,19 @@ export class ExtensionUiController {
 			this.#applyStatusLineRenderer(renderer, registered);
 			this.ctx.ui.requestRender();
 		});
-		// A Tern Surface Protocol terminal builds its own bar from
-		// `StatusLineComponent.describeComposerFacts()` and never reads
-		// `render()`, so an override installed while a surface is live would
-		// stand down every box placement in order to feed a surface it cannot
-		// reach — a blank composer rather than a renderer's rows. Declining it
-		// keeps the built-in bar honest, and re-syncs when the surface closes
-		// so the renderer is back without a restart.
-		this.#statusLineRendererNativeUnsubscribe?.();
-		this.#statusLineRendererNativeUnsubscribe = onNativeRenderingChange(() => {
-			this.#applyStatusLineRenderer(extensionRunner.getStatusLineRenderer(), false);
-			this.ctx.ui.requestRender();
-		});
+		// A Tern Surface Protocol terminal is not a reason to decline: the status
+		// line describes a dock block there (a renderer's rows, or the node its
+		// `describeNative` returns), so the override reaches whichever surface is
+		// live. Installing it unconditionally is what lets a session gain and lose
+		// a surface without a re-sync.
 	}
 
 	/**
-	 * Hand the renderer to the status line, unless a native surface owns the bar.
-	 *
-	 * `isNativeRendering` is a process-wide flag set when a TSP surface opens,
-	 * so this is a live check rather than a startup one: the same session can
-	 * gain and lose a surface while it runs.
+	 * Hand the renderer to the status line, which paints it on whichever surface
+	 * is live. `registered` marks a genuine re-registration rather than a sync, so
+	 * a renderer that was dropped for throwing gets one more attempt.
 	 */
 	#applyStatusLineRenderer(renderer: StatusLineRenderer | undefined, registered: boolean): void {
-		if (isNativeRendering()) {
-			this.ctx.statusLine.setRendererOverride(undefined);
-			return;
-		}
 		this.ctx.statusLine.setRendererOverride(renderer, { retry: registered });
 	}
 
@@ -182,8 +167,6 @@ export class ExtensionUiController {
 	disposeStatusLineRenderer(): void {
 		this.#statusLineRendererUnsubscribe?.();
 		this.#statusLineRendererUnsubscribe = undefined;
-		this.#statusLineRendererNativeUnsubscribe?.();
-		this.#statusLineRendererNativeUnsubscribe = undefined;
 		this.ctx.statusLine.setRendererErrorSink(undefined);
 	}
 
