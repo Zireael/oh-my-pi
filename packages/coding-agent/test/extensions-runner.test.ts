@@ -4724,9 +4724,7 @@ describe("ExtensionRunner", () => {
 			expect(runner.getStatusLineRenderer()?.id).toBe("late");
 			// A failing renderer has to be attributable to the extension that
 			// registered it, or the author only sees an anonymous status line.
-			expect(runner.getStatusLineRendererExtensionPath("late")).toBe(
-				path.join(extensionsDir, "late-renderer.ts"),
-			);
+			expect(runner.getStatusLineRendererExtensionPath("late")).toBe(path.join(extensionsDir, "late-renderer.ts"));
 			expect(runner.getStatusLineRendererExtensionPath("never-registered")).toBeUndefined();
 		});
 
