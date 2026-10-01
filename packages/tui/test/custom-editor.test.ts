@@ -487,6 +487,18 @@ describe("CustomEditor bracketed path paste", () => {
 		]);
 	});
 
+	it("leaves a drive-letter `file://` URL to the platform decoder", () => {
+		// A Windows decode of `file:///C:/…` is what makes the URL loadable
+		// there; the POSIX retry only exists for URLs the platform decoder
+		// rejects. If the retry ever claimed this one first, the paste would
+		// resolve to `/C:/…` — a path the loader never validated against.
+		const decoded = extractBracketedImagePastePaths(bracketedPaste("file:///C:/Users/me/My%20Pictures/photo.png"));
+		expect(decoded).toHaveLength(1);
+		expect(decoded?.[0]).toBe(
+			process.platform === "win32" ? "C:\\Users\\me\\My Pictures\\photo.png" : "/C:/Users/me/My Pictures/photo.png",
+		);
+	});
+
 	it("extracts explicit non-image paths without classifying them as image paths", () => {
 		expect(extractBracketedPastePaths(bracketedPaste("/tmp/report.csv"))).toEqual(["/tmp/report.csv"]);
 		expect(extractBracketedImagePastePaths(bracketedPaste("/tmp/report.csv"))).toBeUndefined();

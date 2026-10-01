@@ -172,6 +172,33 @@ function isPastedPathSeparator(char: string | undefined): boolean {
 	return char === undefined || char === " " || char === "\t" || char === "\r" || char === "\n";
 }
 
+/**
+ * Decode a pasted `file://` URL into the filesystem path it names, or
+ * `undefined` when it names none.
+ *
+ * The native decoder stays authoritative: it owns Windows drive-letter and UNC
+ * URLs (`file:///C:/…` → `C:\…`, `file://server/share/…` → `\\server\share\…`)
+ * and is the only thing that can normalize them. Windows *rejects* a POSIX-shaped
+ * URL outright, though — `fileURLToPath("file:///Users/me/photo.png")` throws
+ * "File URL path must be an absolute path" because the path carries no drive
+ * letter — so a macOS pasteboard URL pasted on Windows kept its literal
+ * `file:///…` text and failed to load. Retrying as a POSIX path recovers those
+ * without displacing anything the native route already decoded, and on POSIX the
+ * retry is the same code path as the first attempt.
+ */
+function fileUriToLocalPath(unquoted: string): string | undefined {
+	try {
+		return url.fileURLToPath(unquoted);
+	} catch {
+		// Not a path this platform's decoder accepts; try the POSIX reading.
+	}
+	try {
+		return url.fileURLToPath(unquoted, { windows: false });
+	} catch {
+		return undefined;
+	}
+}
+
 function normalizePastedPath(path: string): string {
 	const trimmed = path.trim();
 	const first = trimmed[0];
@@ -185,12 +212,10 @@ function normalizePastedPath(path: string): string {
 	// `public.file-url` representation — loads as the file itself rather
 	// than failing in `loadImageInput` with a literal-`file://` path.
 	if (FILE_URI_REGEX.test(unquoted)) {
-		try {
-			return url.fileURLToPath(unquoted);
-		} catch {
-			// Malformed file URL: drop through to the shell-unescape branch
-			// so the caller can still reject it as a non-explicit path.
-		}
+		const decoded = fileUriToLocalPath(unquoted);
+		if (decoded !== undefined) return decoded;
+		// Malformed file URL: drop through to the shell-unescape branch
+		// so the caller can still reject it as a non-explicit path.
 	}
 	return unquoted.replace(SHELL_ESCAPED_PATH_CHAR_REGEX, "$1");
 }

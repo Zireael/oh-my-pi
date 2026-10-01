@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a pasted `file://` URL that names a POSIX path (e.g. a macOS `public.file-url` paste) keeping its literal `file:///…` text on Windows instead of loading the file.
+
 ## [18.4.5] - 2026-09-30
 
 ### Added
