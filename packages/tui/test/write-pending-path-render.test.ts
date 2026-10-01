@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import { afterEach, describe, expect, it } from "bun:test";
 import { TERMINAL, setTerminalHyperlinks } from "@oh-my-pi/pi-tui";
 import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
@@ -8,6 +9,17 @@ import { writeToolRenderer } from "@oh-my-pi/pi-tui/tools/write";
 
 const ORIGINAL_HYPERLINKS = TERMINAL.hyperlinks;
 const ORIGINAL_TERMINAL_ID = Object.getOwnPropertyDescriptor(TERMINAL, "id");
+
+/**
+ * The `vscode://file/<path>` target VS Code navigates, built from a native
+ * filesystem path: the path reaches the editor in URI form, so a Windows
+ * `D:\…` must arrive as `/D:/…` rather than concatenated verbatim behind
+ * `vscode://file`, where it would not parse as a URI.
+ */
+function vscodeFileTarget(filePath: string): string {
+	const asUriPath = filePath.replace(/\\/gu, "/");
+	return `vscode://file${asUriPath.startsWith("/") ? "" : "/"}${asUriPath}`;
+}
 
 afterEach(() => {
 	applyHyperlinkSetting("auto");
@@ -49,7 +61,7 @@ describe("pending write path rendering", () => {
 			uiTheme,
 		);
 		const rendered = component?.render(120).join("\n");
-		expect(rendered).toContain(`vscode://file${path.resolve(relativePath)}`);
+		expect(rendered).toContain(vscodeFileTarget(path.resolve(relativePath)));
 	});
 
 	it("links archive members, database rows, and home paths to their files", async () => {
@@ -72,7 +84,10 @@ describe("pending write path rendering", () => {
 				.join("\n")
 				.match(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/)?.[1];
 			expect(target).toBeDefined();
-			expect(decodeURIComponent(new URL(target!).pathname)).toBe(path.resolve(containingFile));
+			// `URL.pathname` is not a filesystem path: on Windows it is the
+			// percent-encoded `/D:/…` URI form, so it has to go back through the
+			// decoder that knows the platform's separators and drive letter.
+			expect(url.fileURLToPath(target!)).toBe(path.resolve(containingFile));
 		}
 	});
 

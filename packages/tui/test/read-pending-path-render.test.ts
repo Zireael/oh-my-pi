@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import { afterEach, describe, expect, it } from "bun:test";
 import { TERMINAL, setTerminalHyperlinks } from "@oh-my-pi/pi-tui";
 import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
@@ -49,7 +50,10 @@ describe("pending read path rendering", () => {
 				.join("\n")
 				.match(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/)?.[1];
 			expect(target).toBeDefined();
-			expect(decodeURIComponent(new URL(target!).pathname)).toBe(containingFile);
+			// `URL.pathname` is not a filesystem path: on Windows it is the
+			// percent-encoded `/D:/…` URI form, so it has to go back through the
+			// decoder that knows the platform's separators and drive letter.
+			expect(url.fileURLToPath(target!)).toBe(containingFile);
 		}
 	});
 
