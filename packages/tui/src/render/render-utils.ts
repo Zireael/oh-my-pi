@@ -1042,8 +1042,15 @@ export function formatToolWorkingDirectory(workdir: string | undefined, projectD
 		return undefined;
 	}
 	const relativePath = path.relative(resolvedProjectDir, resolvedWorkdir);
+	// `path.relative` returns the *absolute* target rather than a `..` chain when the
+	// two paths sit on different Windows drives (project on `D:`, workdir on `C:`).
+	// Without the absolute check that reads as "inside the project" and prints the
+	// raw workdir, leaking the home prefix this branch exists to shorten.
 	const isWithinProject =
-		relativePath.length > 0 && !relativePath.startsWith("..") && !relativePath.startsWith(`..${path.sep}`);
+		relativePath.length > 0 &&
+		!path.isAbsolute(relativePath) &&
+		!relativePath.startsWith("..") &&
+		!relativePath.startsWith(`..${path.sep}`);
 	const displayWorkdir = isWithinProject ? relativePath : shortenPath(resolvedWorkdir);
 	return replaceTabs(displayWorkdir);
 }

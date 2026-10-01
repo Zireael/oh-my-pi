@@ -13,6 +13,7 @@ import {
 	formatErrorMessage,
 	formatExpandHint,
 	formatParseErrors,
+	formatToolWorkingDirectory,
 	formatFeedModelBadge,
 	PREVIEW_LIMITS,
 	resolveImageOptions,
@@ -268,6 +269,30 @@ describe("shortenPath", () => {
 		expect(shortenPath("/home/me/projects/demo", "/home/me/")).toBe("~/projects/demo");
 		expect(shortenPath("/home/me2/demo", "/home/me/")).toBe("/home/me2/demo");
 	});
+});
+
+describe("formatToolWorkingDirectory", () => {
+	it("renders a workdir inside the project as a relative path", () => {
+		const projectDir = path.resolve("projects/demo");
+		expect(formatToolWorkingDirectory(path.join(projectDir, "src"), projectDir)).toBe("src");
+		expect(formatToolWorkingDirectory(projectDir, projectDir)).toBeUndefined();
+		expect(formatToolWorkingDirectory(undefined, projectDir)).toBeUndefined();
+	});
+
+	it.skipIf(process.platform !== "win32")(
+		"shortens a cross-drive workdir instead of printing its absolute path",
+		() => {
+			// `path.relative` across drives yields the absolute target, not a `..`
+			// chain, so a "does not start with .." check alone read it as inside the
+			// project and printed the raw workdir — leaking the home prefix.
+			const homeDrive = path.win32.parse(os.homedir()).root.slice(0, 2).toLowerCase();
+			const projectDir = `${homeDrive === "c:" ? "D:" : "C:"}\\Coding\\demo`;
+
+			expect(formatToolWorkingDirectory(path.join(os.homedir(), "projects", "demo"), projectDir)).toBe(
+				"~/projects/demo",
+			);
+		},
+	);
 });
 
 describe("Windows home aliases", () => {
