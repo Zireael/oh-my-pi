@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { COMPOSER_DEFAULTS, type ComposerStatusCache } from "@oh-my-pi/pi-tui/prompt/composer";
 import { ComposerCache } from "@oh-my-pi/pi-tui/prompt/composer-cache";
@@ -24,16 +24,21 @@ function statusFor(thinkingLevel: ThinkingLevel): ComposerStatusCache {
 }
 
 describe("composer startup cache", () => {
+	let tempDir: TempDir;
 	let root: string;
 	let dbPath: string;
 
 	beforeEach(async () => {
-		root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-composer-cache-"));
-		dbPath = path.join(root, "cache", "composer.db");
+		// TempDir rather than a hand-rolled mkdtemp/rm: Windows holds the SQLite
+		// file lock for up to ~1.5s after close(), so the plain `rm` in afterEach
+		// fails with EBUSY and fails the test for a reason no product code has.
+		tempDir = await TempDir.create("omp-composer-cache-");
+		root = tempDir.path();
+		dbPath = tempDir.join("cache", "composer.db");
 	});
 
 	afterEach(async () => {
-		await fs.rm(root, { recursive: true, force: true });
+		await tempDir.remove();
 	});
 
 	it("round-trips per-project speculation and serves settings-derived rows to projects without their own", () => {
