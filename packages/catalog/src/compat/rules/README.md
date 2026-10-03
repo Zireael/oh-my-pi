@@ -183,14 +183,16 @@ provider "openrouter" {
 | ---------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `class`    | `class "id" { ... }`                     | Exact class ID. At document root it may contain `on`, `on-api`, `family`, `revision`, and `models`. Under `provider` it may contain `family`, `revision`, and `models`.        |
 | `provider` | `provider "id" { ... }`                  | Exact provider ID. It is root-only and may contain `class`, `on-api`, and `models`.                                                                                           |
-| `on`       | `on "provider-a" "provider-b" { ... }`   | One or more provider IDs, combined as OR. It is allowed only under a root `class`, and may contain `family`, `revision`, and `models`.                                         |
-| `on-api`   | `on-api "adapter-a" "adapter-b" { ... }` | One or more request adapter IDs, combined as OR. At document root it may contain `class` and `models`; under a root `class` or `provider` it may contain `family`, `revision`, and `models`. |
+| `on`       | `on "provider-a" "provider-b" { ... }`   | One or more provider IDs, combined as OR. It is allowed under a root `class`, and may contain `on-api` to conjoin an API scope plus `family`, `revision`, and `models`. |
+| `on-api`   | `on-api "adapter-a" "adapter-b" { ... }` | One or more request adapter IDs, combined as OR. At document root it may contain `class` and `models`; under a root `class` (directly or nested inside `on`) or `provider` it may contain `family`, `revision`, and `models`. |
 | `family`   | `family "id" { ... }`                    | Exact classified family ID. It may contain `revision` and `models`. A target with no family does not match.                                                                    |
 | `revision` | `revision ">=2.5 <4" { ... }`            | A non-empty, whitespace-separated conjunction of comparisons. It may contain `models`. A target with no revision does not match.                                               |
 | `models`   | `models "id" "vendor/*" { ... }`         | One or more alternatives, combined as OR. It may contain only `on-upstream`. `token="name"` matches an ASCII-case-insensitive token bounded by non-alphanumerics.                 |
 | `on-upstream` | `on-upstream "a" "b" { ... }`        | Exact selected upstream IDs, combined as OR. Allowed inside any selector scope once; preserves the containing scope's other permitted children. Absent upstream never matches. |
 
 Every selector scope may additionally contain `on-upstream`; it cannot replace an already constrained upstream. Class, provider/`on`, `on-api`, `on-upstream`, and family values are compared exactly and case-sensitively to the structured resolve target. Revision operators are `>=`, `>`, `<=`, `<`, and `=`; operands have one to three dot-separated unsigned 8-bit components, omitted components zero.
+
+An `on-api` nested inside `on` under a class requires both the selected provider and request adapter; values within each selector remain alternatives.
 
 A `models` string without `*` is an exact, case-sensitive match against the provider-relative model identifier. A string containing `*` is an anchored, ASCII-case-insensitive wildcard match. Prefer taxonomy ranks; retain exact/glob lists only when they isolate the census member set exactly, and keep a `// residue:` comment explaining why ranks do not.
 
@@ -207,7 +209,7 @@ The directive vocabulary is closed and lives in **`src/compat/axes.ts`** — one
 The three value shapes are:
 
 - **Scalar**: exactly one KDL boolean, integer, float, or string argument and no children. `#null` is rejected.
-- **Array**: one or more scalar arguments and no children; it resolves to a JSON array. Axes marked `emptyArray` in `axes.ts` also accept a bare directive, which assigns an explicit empty list (`region-upstreams-eu` with no arguments: the region never serves the model).
+- **Array**: one or more scalar arguments and no children; it resolves to a JSON array. Axes marked `emptyArray` in `axes.ts` also accept a bare directive, which assigns an explicit empty list (`region-upstreams-eu` with no arguments: the region never serves the model). Bare `thinking-efforts` keeps a reasoning-capable deployment without selectable effort tiers off the effort dial.
 - **Object**: no arguments and a child block, including an empty block. Child names are kebab-case: an axis-directive spelling compiles to its resolved axis key (`template-reasoning-effort` → `qwenTemplateReasoningEffort`), anything else converts mechanically (`input-threshold` → `inputThreshold`); camelCase names are a compile error. `extra-body` payloads (top-level or nested) are the exception — their child names are literal wire JSON keys copied verbatim (`enable_thinking`). Each child is either one scalar or another object; arrays are not representable inside an object payload.
 
 A rule cannot assign the same resolved axis twice in one block.

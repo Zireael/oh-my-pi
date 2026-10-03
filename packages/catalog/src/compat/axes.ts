@@ -292,8 +292,8 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"stream-first-event-timeout-ms": wire("streamFirstEventTimeoutMs", [...OAI, "google"]),
 	"stream-idle-timeout-ms": wire("streamIdleTimeoutMs", [...OAI, "anthropic", "bedrock", "google"]),
 	"strip-image-input": wire("stripImageInput", [...OAI, "anthropic", "google"]),
-	"supports-forced-tool-choice": wire("supportsForcedToolChoice", [...OAI, "anthropic"]),
-	"supports-sampling-params": wire("supportsSamplingParams", [...OAI, "anthropic"]),
+	"supports-forced-tool-choice": wire("supportsForcedToolChoice", [...OAI, "anthropic", "bedrock"]),
+	"supports-sampling-params": wire("supportsSamplingParams", [...OAI, "anthropic", "bedrock", "devin", "google"]),
 	"thinking-loop-guard": wire("thinkingLoopGuard", [...OAI, "anthropic", "google"], "scalar", [
 		"gemini",
 		"deepseek",
@@ -304,7 +304,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"thinking-default-level": { key: "defaultLevel", set: "thinking", shape: "scalar", values: EFFORTS },
 	"thinking-effort-budgets": { key: "effortBudgets", set: "thinking", shape: "object" },
 	"thinking-effort-map": { key: "effortMap", set: "thinking", shape: "object" },
-	"thinking-efforts": { key: "efforts", set: "thinking", shape: "array", values: EFFORTS },
+	"thinking-efforts": { key: "efforts", set: "thinking", shape: "array", values: EFFORTS, emptyArray: true },
 	"thinking-mode": {
 		key: "mode",
 		set: "thinking",

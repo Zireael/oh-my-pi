@@ -20,6 +20,7 @@ import { captureTerminalExit, expectExitRequested, type TerminalExitCapture } fr
 /** The error Bun's node:tty shim raises for an ioctl on a revoked pty. */
 const REVOKED_PTY = "setRawMode failed with errno: 2";
 
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
@@ -39,6 +40,8 @@ describe("ProcessTerminal disconnect with a revoked pty", () => {
 	beforeEach(() => {
 		exits = captureTerminalExit();
 		previousHeadless = setTerminalHeadless(false);
+		// SIGHUP is the POSIX disconnect exit; Windows calls postmortem.quit(129), which would end the test worker.
+		Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 		vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
@@ -54,6 +57,7 @@ describe("ProcessTerminal disconnect with a revoked pty", () => {
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
 		setTerminalHeadless(previousHeadless);
+		restoreProperty(process, "platform", platformDescriptor);
 	});
 
 	it("still asks the process to exit when restoring raw mode throws on a revoked fd", () => {
