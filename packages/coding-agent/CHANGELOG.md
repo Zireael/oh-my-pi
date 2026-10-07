@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Pi plugins that import `compositeTuiLine`, `allocateImageId`, `isViewportTUI`, or `HStack` from the Pi TUI package root now load instead of failing while their imports are linked, and an `HStack` slot clips a child wider than the slot instead of ellipsizing it ([#14296](https://github.com/can1357/oh-my-pi/pull/14296) by [@Zireael](https://github.com/Zireael)).
 - Fixed relative file links in Tern assistant replies opening against the folder omp was started in after `/wt` or `/move`; they now open the file in the session's working directory ([#14879](https://github.com/can1357/oh-my-pi/pull/14879) by [@H4vC](https://github.com/H4vC))
 
 ## [18.8.3] - 2026-10-07
