@@ -11,17 +11,16 @@ import {
 	setTerminalImageProtocol,
 	TERMINAL,
 	TUI,
-	VIEWPORT_TUI,
 	visibleWidth,
-} from "@oh-my-pi/pi-tui";
-import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
-import { VirtualRenderScheduler } from "./virtual-render-scheduler";
-import { VirtualTerminal } from "./virtual-terminal";
+} from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-tui-shim";
+import { withoutTerminalMultiplexer } from "../../../tui/test/helpers/terminal-multiplexer";
+import { VirtualRenderScheduler } from "../../../tui/test/virtual-render-scheduler";
+import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
 
 // The Pi names a Pi extension imports at runtime: one missing is an ESM link
 // error, so the whole extension fails to load. These cover the surface omp
-// serves from this package, including the places where Pi's layout semantics and
-// this package's native API could silently diverge.
+// serves from the legacy shim, including the places where Pi's layout semantics
+// and this package's native API could silently diverge.
 
 withoutTerminalMultiplexer();
 
@@ -29,11 +28,6 @@ const originalProtocol = TERMINAL.imageProtocol;
 afterEach(() => {
 	setTerminalImageProtocol(originalProtocol);
 });
-
-/** Read a branded value by its symbol key; the brand is a plain `symbol`. */
-function branded(value: object): Record<PropertyKey, unknown> {
-	return value as Record<PropertyKey, unknown>;
-}
 
 /** Rows with the trailing fill removed; leading cells are meaningful. */
 function cells(lines: readonly string[]): string[] {
@@ -89,40 +83,27 @@ describe("compositeTuiLine", () => {
 });
 
 describe("isViewportTUI", () => {
-	it("is true for a TUI, which is branded as owning the viewport", () => {
+	it("is false for omp's TUI, which is handed no viewport root to replace", () => {
 		const tui = new TUI(new VirtualTerminal(20, 5), undefined, { renderScheduler: new VirtualRenderScheduler() });
-		expect(isViewportTUI(tui)).toBe(true);
-		expect(branded(tui)[VIEWPORT_TUI]).toBe(true);
+		// The brand exists so an extension can tell whether installing a layout
+		// root will actually take effect. omp's TUI paints its child list through
+		// the composer's frame provider rather than through TUI.render(), so it is
+		// deliberately unbranded and carries no setter to misuse.
+		expect(isViewportTUI(tui)).toBe(false);
+		expect("layoutRoot" in tui).toBe(false);
+		expect("setLayoutRoot" in tui).toBe(false);
 	});
 
 	it("is false for anything that is not branded", () => {
 		expect(isViewportTUI(undefined)).toBe(false);
 		expect(isViewportTUI(null)).toBe(false);
 		expect(isViewportTUI({})).toBe(false);
-		expect(isViewportTUI({ [VIEWPORT_TUI]: false } as object)).toBe(false);
-		expect(isViewportTUI({ [VIEWPORT_TUI]: 1 } as object)).toBe(false);
+		expect(isViewportTUI({ [Symbol.for("@earendil-works/pi-tui/viewport")]: false })).toBe(false);
+		expect(isViewportTUI({ [Symbol.for("@earendil-works/pi-tui/viewport")]: 1 })).toBe(false);
 	});
 
-	it("reads the brand through the shared registry, so a duplicate copy agrees", () => {
-		expect(VIEWPORT_TUI === Symbol.for("@earendil-works/pi-tui/viewport")).toBe(true);
-		expect(isViewportTUI({ [Symbol.for("@earendil-works/pi-tui/viewport")]: true } as object)).toBe(true);
-	});
-});
-
-describe("TUI layoutRoot", () => {
-	it("renders the child list until a root is installed, then only that root", () => {
-		const tui = new TUI(new VirtualTerminal(20, 5), undefined, { renderScheduler: new VirtualRenderScheduler() });
-		tui.addChild(new Rows(["child-list"]));
-		expect(cells(tui.render(20))).toEqual(["child-list"]);
-
-		expect(tui.layoutRoot).toBe(undefined);
-		tui.setLayoutRoot(new Rows(["override"]));
-		expect(cells(tui.layoutRoot?.render(20) ?? [])).toEqual(["override"]);
-		// The override replaces the child list rather than joining it.
-		expect(cells(tui.render(20))).toEqual(["override"]);
-
-		tui.setLayoutRoot(undefined);
-		expect(cells(tui.render(20))).toEqual(["child-list"]);
+	it("recognises a Pi viewport TUI through the shared symbol registry", () => {
+		expect(isViewportTUI({ [Symbol.for("@earendil-works/pi-tui/viewport")]: true })).toBe(true);
 	});
 });
 
@@ -167,13 +148,17 @@ describe("allocateImageId", () => {
 });
 
 describe("HStack", () => {
+	// The expectations below are Pi's own output, captured by running Pi's HStack
+	// against the same inputs: a slot is `basis` columns wide whether or not its
+	// content fills it, and a child that overflows its slot is cut at the column
+	// rather than ellipsized.
 	it("lays children out side by side at their basis", () => {
 		const stack = new HStack([
 			{ component: new Rows(["ab"]), basis: 4 },
 			{ component: new Rows(["cd"]), basis: 6 },
 		]);
 		const lines = stack.render(10);
-		expect(cells(lines)).toEqual(["abcd"]);
+		expect(cells(lines)).toEqual(["ab  cd"]);
 		expect(lines.every(line => visibleWidth(line) === 10)).toBe(true);
 	});
 
@@ -251,7 +236,8 @@ describe("HStack", () => {
 			},
 		]);
 		expect(cells(stack.render(6))).toEqual(["m"]);
-		expect(cells(stack.render(8))).toEqual(["ms"]);
+		// Each basis-2 slot pads its content, so the row reads "m s", as in Pi.
+		expect(cells(stack.render(8))).toEqual(["m s"]);
 		// Pi measures against the whole stack width, not the child's own slot.
 		expect(seen).toContain(6);
 		expect(seen).toContain(8);
@@ -269,14 +255,16 @@ describe("HStack", () => {
 			{ component: first, basis: 5 },
 			{ component: second, basis: 5 },
 		]);
+		// "second" overflows its 5-column slot and is cut at the column, not
+		// ellipsized: Pi strict-slices a child into its slot.
 		expect(cells(stack.render(10))).toEqual(["firstsecon"]);
 
 		stack.removeChild(first);
 		expect(stack.children).toEqual([second]);
-		expect(cells(stack.render(10))).toEqual(["second"]);
+		expect(cells(stack.render(10))).toEqual(["secon"]);
 
 		stack.addChild(first, { basis: 4 });
-		expect(cells(stack.render(10))).toEqual(["secondfirs"]);
+		expect(cells(stack.render(10))).toEqual(["seconfirs"]);
 
 		stack.clear();
 		expect(stack.children).toEqual([]);

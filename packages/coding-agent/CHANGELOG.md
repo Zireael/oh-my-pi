@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Pi plugins that import `compositeTuiLine`, `allocateImageId`, `isViewportTUI`, or `HStack` from the Pi TUI package root now load instead of failing while their imports are linked, and an `HStack` slot clips a child wider than the slot instead of ellipsizing it ([#14296](https://github.com/can1357/oh-my-pi/pull/14296) by [@Zireael](https://github.com/Zireael)).
 - Fixed follow-up hashline edits being rejected as anchored on lines "never displayed" after an earlier edit shifted those lines, when the replacement carries the anchored content; genuinely stale line numbers are still rejected ([#14254](https://github.com/can1357/oh-my-pi/pull/14254) by [@abilliontokens](https://github.com/abilliontokens)).
 
 ## [18.6.0] - 2026-10-03
