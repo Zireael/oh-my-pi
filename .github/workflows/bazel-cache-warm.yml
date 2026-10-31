@@ -31,23 +31,10 @@ name: Warm bazel disk cache
 # packages/** push cannot change any archive, so it does not trigger a warm.
 
 on:
-   push:
-      branches: [main]
-      paths:
-         - "crates/**"
-         - "bazel/**"
-         - "MODULE.bazel"
-         - "MODULE.bazel.lock"
-         - "BUILD.bazel"
-         - ".bazelrc"
-         - ".bazelignore"
-         - ".bazelversion"
-         - "Cargo.toml"
-         - "Cargo.lock"
-         - "rust-toolchain.toml"
-         - "rustfmt.toml"
-         - "bun.lock"
-         - ".github/**"
+  # Automatic triggers (push / pull_request / schedule / release /
+  # workflow_run / ...) were removed on 2026-10-31. This workflow now
+  # runs only when started by hand: Actions tab -> Run workflow, or
+  # `gh workflow run <file>`.
    workflow_dispatch:
       inputs:
          only:
