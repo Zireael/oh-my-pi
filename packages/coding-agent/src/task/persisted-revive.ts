@@ -96,6 +96,8 @@ export interface PersistedReviveSpec {
 	readonly taskDepth: number;
 	/** The consulted source of a persisted seance session. */
 	readonly restoredSeance: RestoredSeanceSession | undefined;
+	/** The recorded worktree of an isolated run; absent for non-isolated revivals. */
+	readonly cwd?: string;
 	/** The live top-level session revived agents join (cwd, extension roots, parent grants). */
 	readonly root: AgentSessionHandle;
 	/** Registry id of {@link root}. */
@@ -173,6 +175,7 @@ export function createPersistedSubagentReviverFactory(
 		// is gone (isolated/merged worktree, moved dir): leave it transcript-only
 		// (history://) rather than resurrect a wrong or broken session.
 		if (!peek?.init) return undefined;
+		const isolated = peek.init.isolated === true;
 		let restoredSeance: RestoredSeanceSession | undefined;
 		if (peek.seanceSource !== undefined) {
 			try {
@@ -190,15 +193,12 @@ export function createPersistedSubagentReviverFactory(
 			}
 			if (!restoredSeance) return undefined;
 		}
-		// Isolated runs are never resumable: their worktree is merged + cleaned,
-		// and the parent was told messaging is impossible. A retained workspace
-		// (capture/persist failure) still exists on disk and would pass the cwd
-		// probe below, so gate on the stamped contract instead — otherwise a
-		// restart + peer message revives the agent outside isolation, in the
-		// parent cwd, contradicting the delivery notice.
-		if (peek.init.isolated) return undefined;
+		// An isolated run's worktree is normally merged + cleaned when it finishes,
+		// but a host crash can leave it on disk. Revive it only in that recorded
+		// worktree: resuming in the parent cwd would break the isolation contract.
+		const workspace = restoredSeance?.cwd ?? peek.cwd;
 		try {
-			await fs.stat(restoredSeance?.cwd ?? peek.cwd);
+			if (!(await fs.stat(workspace)).isDirectory()) return undefined;
 		} catch {
 			return undefined;
 		}
@@ -222,6 +222,7 @@ export function createPersistedSubagentReviverFactory(
 				sessionFile,
 				taskDepth,
 				restoredSeance,
+				cwd: isolated ? workspace : undefined,
 				root: ctx.session,
 				rootAgentId: ctx.session.getAgentId?.() ?? MAIN_AGENT_ID,
 				costGate: ctx.session.costGate,
@@ -434,7 +435,7 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 	let session: AgentSession;
 	try {
 		({ session } = await createAgentSession({
-			cwd: restoredSeance?.cwd ?? spec.root.sessionManager.getCwd(),
+			cwd: restoredSeance?.cwd ?? spec.cwd ?? spec.root.sessionManager.getCwd(),
 			costGate: spec.costGate,
 			authStorage: spec.authStorage,
 			// Revived agents join the root session tree, so their observability

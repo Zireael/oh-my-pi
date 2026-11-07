@@ -558,18 +558,40 @@ describe("persisted subagent revival", () => {
 		expect(capturedOptions?.customTools).toBeUndefined();
 	});
 
-	it("leaves isolated sessions transcript-only even when the workspace still exists", async () => {
-		// Isolated runs are never resumable: the worktree is merged + cleaned,
-		// and the parent is told messaging is impossible. A retained workspace
-		// (capture/persist failure) still passes the cwd probe, so the stamped
-		// contract — not directory existence — must gate revival. Otherwise a
-		// restart + Hub message revives the agent in the parent cwd, outside
-		// isolation.
-		const cwd = makeTempDir("@pi-isolated-revive-");
-		const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, { isolated: true });
+	it("revives an isolated session in its recorded worktree while that worktree exists", async () => {
+		const parentCwd = makeTempDir("@pi-isolated-parent-");
+		const worktreeCwd = makeTempDir("@pi-isolated-worktree-");
+		const sessionFile = await createPersistedSession(worktreeCwd, undefined, undefined, undefined, {
+			isolated: true,
+		});
+		let capturedOptions: CreateAgentSessionOptions | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			capturedOptions = options;
+			return { session: createRevivedSession([]).session } as CreateAgentSessionResult;
+		});
 
 		const ref = createRef(sessionFile);
-		const reviver = await createFactory(cwd)(ref);
+		const reviver = await createFactory(parentCwd)(ref);
+		if (typeof reviver !== "function") throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		// The isolated run must resume in its recorded worktree, never in the
+		// parent checkout: the parent's cwd is where the isolation contract
+		// forbids it from writing.
+		expect(capturedOptions?.cwd).toBe(worktreeCwd);
+	});
+
+	it("leaves an isolated session transcript-only when its recorded worktree is gone", async () => {
+		const parentCwd = makeTempDir("@pi-isolated-parent-");
+		const worktreeCwd = makeTempDir("@pi-isolated-worktree-");
+		const sessionFile = await createPersistedSession(worktreeCwd, undefined, undefined, undefined, {
+			isolated: true,
+		});
+		const movedSessionFile = path.join(parentCwd, "isolated.jsonl");
+		fs.renameSync(sessionFile, movedSessionFile);
+		fs.rmSync(worktreeCwd, { recursive: true, force: true });
+
+		const reviver = await createFactory(parentCwd)(createRef(movedSessionFile));
 		expect(reviver).toBeUndefined();
 	});
 

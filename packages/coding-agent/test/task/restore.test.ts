@@ -57,6 +57,7 @@ async function writeSubagent(
 	id: string,
 	messages: Message[],
 	agent?: string,
+	isolated?: boolean,
 ): Promise<string> {
 	const file = path.join(mainFile.slice(0, -6), `${id}.jsonl`);
 	const manager = await SessionManager.open(file, undefined, undefined, {
@@ -64,14 +65,20 @@ async function writeSubagent(
 		parentSession: mainFile,
 		suppressBreadcrumb: true,
 	});
-	manager.appendSessionInit({ systemPrompt: ["sub prompt"], task: `${id} task`, tools: ["read", "yield"], agent });
+	manager.appendSessionInit({
+		systemPrompt: ["sub prompt"],
+		task: `${id} task`,
+		tools: ["read", "yield"],
+		agent,
+		isolated,
+	});
 	for (const message of messages) manager.appendMessage(message);
 	await manager.close();
 	return file;
 }
 
 describe("restoreSession (omp --restore)", () => {
-	const ids = ["Cut", "Done", "Killed"];
+	const ids = ["Cut", "Done", "Killed", "IsoCut"];
 	let tempDir: TempDir | undefined;
 	let manager: AsyncJobManager | undefined;
 
@@ -139,5 +146,59 @@ describe("restoreSession (omp --restore)", () => {
 		await manager.getJob("Cut")!.promise;
 		await manager.drainDeliveries({ filter: { ownerId: MAIN_AGENT_ID } });
 		expect(delivered).toEqual(["Cut"]);
+	});
+
+	it("restores an isolated subagent while its recorded worktree still exists", async () => {
+		tempDir = TempDir.createSync("@pi-restore-isolated-");
+		const cwd = tempDir.path();
+		const main = SessionManager.create(cwd, path.join(cwd, "sessions"));
+		main.appendMessage({ role: "user", content: "fan out", timestamp: Date.now() });
+		const mainFile = main.getSessionFile();
+		if (!mainFile) throw new Error("Expected a persisted session file");
+		await main.close();
+		await writeSubagent(mainFile, cwd, "IsoCut", cutOff, "scout", true);
+
+		manager = new AsyncJobManager({});
+		const delivered: string[] = [];
+		manager.registerDeliverySink(MAIN_AGENT_ID, jobId => {
+			delivered.push(jobId);
+		});
+		const result: SingleResult = {
+			index: 0,
+			id: "IsoCut",
+			agent: "IsoCut",
+			agentSource: "user",
+			task: "IsoCut task",
+			exitCode: 0,
+			output: "finished after the restart",
+			stderr: "",
+			truncated: false,
+			durationMs: 5,
+			tokens: 0,
+			requests: 1,
+		};
+		const followUp = vi.spyOn(executorModule, "runSubagentFollowUpTurn").mockResolvedValue(result);
+		const restoreTurn = vi.fn(async () => true);
+		const session = {
+			sessionManager: { getSessionFile: () => mainFile },
+			asyncJobManager: manager,
+			settings: Settings.isolated(),
+			restoreInterruptedTurn: restoreTurn,
+		} as unknown as AgentSession;
+
+		const outcome = await restoreSession(session);
+
+		expect(outcome).toEqual({ turn: true, subagents: ["IsoCut"] });
+		expect(followUp).toHaveBeenCalledTimes(1);
+		expect(followUp.mock.calls[0]![0]).toMatchObject({
+			id: "IsoCut",
+			agent: { name: "IsoCut" },
+			restore: true,
+			message: "IsoCut task",
+			softRequestBudget: 100,
+		});
+		await manager.getJob("IsoCut")!.promise;
+		await manager.drainDeliveries({ filter: { ownerId: MAIN_AGENT_ID } });
+		expect(delivered).toEqual(["IsoCut"]);
 	});
 });
